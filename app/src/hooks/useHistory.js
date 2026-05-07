@@ -1,35 +1,36 @@
 import { useState, useEffect } from 'react';
-import { ref, query, orderByChild, startAt, endAt, limitToLast, get } from 'firebase/database';
-import { database } from '../services/firebase';
+
+// Shared global mock state so changes sync across screens
+let mockHistoryDB = [
+  { id: '1', type: 'Dispense', slot: '1', med_name: 'Aspirin', scheduled_time: '08:00', actual_time: new Date().toISOString(), temp: 22, humidity: 45 },
+  { id: '2', type: 'Refill', slot: '2', med_name: 'Vitamin C', scheduled_time: 'N/A', actual_time: new Date(Date.now() - 86400000).toISOString(), temp: 21, humidity: 44 }
+];
 
 export function useHistory(deviceId = 'pill_dispenser_01') {
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(mockHistoryDB);
   const [loading, setLoading] = useState(false);
 
-  // Paginated Firebase query (20/page), filter by date range
-  const fetchHistory = async (startDate, endDate, limit = 20) => {
-    setLoading(true);
-    try {
-      const historyRef = ref(database, `history/${deviceId}`);
-      
-      // Assume date strings in ISO format for startAt/endAt
-      let q = query(historyRef, orderByChild('actual_time'), limitToLast(limit));
-      
-      if (startDate && endDate) {
-        q = query(historyRef, orderByChild('actual_time'), startAt(startDate), endAt(endDate), limitToLast(limit));
-      }
+  // Background sync for the mock DB!
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setHistory([...mockHistoryDB]);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
-      const snapshot = await get(q);
-      const data = [];
-      snapshot.forEach((child) => {
-        data.push({ id: child.key, ...child.val() });
-      });
-      // Reverse to get newest first
-      setHistory(data.reverse());
-    } catch (error) {
-      console.error("Error fetching history:", error);
-    }
-    setLoading(false);
+  const addHistoryEvent = (event) => {
+    const newEvent = {
+      ...event,
+      id: Date.now().toString(),
+      actual_time: new Date().toISOString(),
+    };
+    mockHistoryDB = [newEvent, ...mockHistoryDB]; // Sync global
+    setHistory([...mockHistoryDB]); // Update local
+  };
+
+  const fetchHistory = async (startDate, endDate, limit = 20) => {
+    // Force immediate sync
+    setHistory([...mockHistoryDB]);
   };
 
   const exportCSV = () => {
@@ -45,18 +46,8 @@ export function useHistory(deviceId = 'pill_dispenser_01') {
       row.humidity || ''
     ]);
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(e => e.join(','))
-    ].join('\n');
-
-    return csvContent;
+    return [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
   };
 
-  useEffect(() => {
-    fetchHistory();
-    // Default fetch on mount
-  }, [deviceId]);
-
-  return { history, loading, fetchHistory, exportCSV };
+  return { history, loading, fetchHistory, exportCSV, addHistoryEvent };
 }

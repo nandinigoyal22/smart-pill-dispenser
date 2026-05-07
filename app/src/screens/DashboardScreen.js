@@ -1,8 +1,11 @@
-import React from 'react';
-import { View, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { writePin } from '../services/blynk';
 import { useDevice } from '../hooks/useDevice';
 import { useDeviceStatus } from '../hooks/useDeviceStatus';
 import { useSchedule } from '../hooks/useSchedule';
+import { useHistory } from '../hooks/useHistory';
 import { theme } from '../theme/AnalogPrecisionist';
 import { ElevatedCard, ContainerCard } from '../components/Cards';
 import { StatusOrb } from '../components/StatusOrb';
@@ -12,19 +15,72 @@ export default function DashboardScreen() {
   const { sensorData, lastEvent } = useDevice();
   const deviceStatus = useDeviceStatus();
   const { getNextDose } = useSchedule();
+  const { addHistoryEvent } = useHistory();
   
-  const nextDose = getNextDose();
+  const [nextDose, setNextDose] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // If the Wokwi status says it's dispensing, or our local sync state is locked
+  const isDispensing = deviceStatus.currentState === 'DISPENSING' || isSyncing;
+
+  const handleRefresh = useCallback(() => {
+    setNextDose(getNextDose());
+  }, [getNextDose]);
+
+  const handleDispenseOverride = () => {
+    Alert.alert(
+      "Manual Dispense...",
+      "The hardware will physically dispense right now.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Confirm", 
+          onPress: async () => {
+            setIsSyncing(true);
+            
+            // Mimic physical button press by toggling 1 -> 0 quickly
+            await writePin('V3', 1);
+            
+            setTimeout(async () => {
+              await writePin('V3', 0);
+              setIsSyncing(false);
+              
+              addHistoryEvent({ 
+                type: 'Manual', 
+                med_name: nextDose ? nextDose.med : "Unscheduled Pill", 
+                scheduled_time: 'N/A',
+                temp: sensorData.temperature, 
+                humidity: sensorData.humidity 
+              });
+              
+            }, 500);
+          }
+        }
+      ]
+    );
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      handleRefresh();
+    }, [handleRefresh])
+  );
 
   return (
     <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Headline>Medical Directions</Headline>
-        <View style={styles.statusRow}>
-          <StatusOrb isActive={deviceStatus.online && !deviceStatus.isStale} />
-          <TechnicalSmall style={styles.statusText}>
-            {deviceStatus.currentState || 'IDLE'}
-          </TechnicalSmall>
+      <View style={styles.headerRow}>
+        <View>
+          <Headline>Medical Directions</Headline>
+          <View style={styles.statusRow}>
+            <StatusOrb isActive={deviceStatus.online && !deviceStatus.isStale} />
+            <TechnicalSmall style={styles.statusText}>
+              {deviceStatus.currentState || 'IDLE'}
+            </TechnicalSmall>
+          </View>
         </View>
+        <TouchableOpacity style={styles.refreshBtn} onPress={handleRefresh}>
+          <Body style={styles.refreshText}>Refresh</Body>
+        </TouchableOpacity>
       </View>
 
       <ElevatedCard>
@@ -75,8 +131,17 @@ export default function DashboardScreen() {
         </View>
       )}
 
-      <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.8}>
-        <Body style={styles.primaryBtnText}>Dispense Override</Body>
+      <TouchableOpacity 
+        style={[styles.primaryBtn, isDispensing && { backgroundColor: theme.colors.outlineVariant }]} 
+        onPress={handleDispenseOverride} 
+        disabled={isDispensing}
+        activeOpacity={0.8}
+      >
+        {isDispensing ? (
+          <ActivityIndicator color={theme.colors.surface} />
+        ) : (
+          <Body style={styles.primaryBtnText}>Dispense Override</Body>
+        )}
       </TouchableOpacity>
       <View style={{height: 40}} />
     </ScrollView>
@@ -88,10 +153,24 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.xl,
+    paddingTop: 60,
   },
-  header: {
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: theme.spacing.xxl,
     marginTop: theme.spacing.md,
+  },
+  refreshBtn: {
+    backgroundColor: theme.colors.surfaceContainerHighest,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+    borderRadius: theme.radii.round,
+  },
+  refreshText: {
+    fontFamily: 'DMSans_500Medium',
+    color: theme.colors.primary,
   },
   statusRow: {
     flexDirection: 'row',

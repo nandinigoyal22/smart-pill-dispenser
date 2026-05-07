@@ -13,7 +13,7 @@ const Tab = createBottomTabNavigator();
 export default function AppNavigator() {
   return (
     <NavigationContainer>
-      <Tab.Navigator initialRouteName="Dashboard">
+      <Tab.Navigator initialRouteName="Dashboard" screenOptions={{ headerShown: false }}>
         <Tab.Screen name="Dashboard" component={DashboardScreen} />
         <Tab.Screen name="Schedule" component={ScheduleScreen} />
         <Tab.Screen name="Notifications" component={NotificationsScreen} />

@@ -1,11 +1,18 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useHistory } from '../hooks/useHistory';
 import { theme } from '../theme/AnalogPrecisionist';
 import { Headline, Body, Technical, TechnicalSmall } from '../components/Typography';
 
 export default function HistoryScreen() {
   const { history, loading, fetchHistory, exportCSV } = useHistory();
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchHistory();
+    }, [fetchHistory])
+  );
 
   return (
     <View style={styles.container}>
@@ -51,7 +58,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.xl,
-    paddingTop: theme.spacing.xl,
+    paddingTop: 60,
   },
   headerRow: {
     flexDirection: 'row',

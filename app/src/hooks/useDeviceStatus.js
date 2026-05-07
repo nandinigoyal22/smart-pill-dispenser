@@ -1,68 +1,84 @@
-import { useState, useEffect } from 'react';
-import { ref, onValue, off } from 'firebase/database';
-import { database } from '../services/firebase';
+import { useState, useEffect, useRef } from 'react';
+import { readPin } from '../services/blynk';
+import { useHistory } from './useHistory';
 
 export function useDeviceStatus(deviceId = 'pill_dispenser_01') {
   const [statusParams, setStatusParams] = useState({
     online: false,
-    uptime: '0m',
-    wifiRSSI: 0,
-    wifiLabel: 'Unknown',
-    firmwareVersion: '',
-    lastDispense: '',
-    servoHealth: '',
     lidOpen: false,
+    irDetected: false,
     containerEmpty: false,
-    currentState: '',
-    isStale: false,
+    currentState: 'Connecting...',
+    isStale: true,
   });
 
-  const computeUptimeString = (seconds) => {
-    if (!seconds) return '0m';
-    const d = Math.floor(seconds / 86400);
-    const h = Math.floor((seconds % 86400) / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return `${d > 0 ? d + 'd ' : ''}${h > 0 ? h + 'h ' : ''}${m}m`;
-  };
-
-  const getWifiStrengthLabel = (rssi) => {
-    if (rssi >= -50) return 'Excellent';
-    if (rssi >= -60) return 'Good';
-    if (rssi >= -70) return 'Fair';
-    return 'Weak';
-  };
-
-  const isDeviceStale = (last_seen) => {
-    if (!last_seen) return true;
-    const lastSeenTime = new Date(last_seen).getTime();
-    const now = Date.now();
-    return (now - lastSeenTime) > 15 * 60 * 1000; // 15 mins
-  };
+  const lastLoggedStatus = useRef("");
+  const { addHistoryEvent } = useHistory();
 
   useEffect(() => {
-    const statusRef = ref(database, `devices/${deviceId}/device_status`);
+    let isMounted = true;
 
-    onValue(statusRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        setStatusParams({
-          online: data.online,
-          uptime: computeUptimeString(data.uptime_seconds),
-          wifiRSSI: data.wifi_rssi,
-          wifiLabel: getWifiStrengthLabel(data.wifi_rssi),
-          firmwareVersion: data.firmware_version,
-          lastDispense: data.last_dispense,
-          servoHealth: data.servo_health,
-          lidOpen: data.lid_open,
-          containerEmpty: data.container_empty,
-          currentState: data.current_state,
-          isStale: isDeviceStale(data.last_seen),
+    const fetchStatus = async () => {
+      const [v2, v5, v6] = await Promise.all([
+        readPin('V2'), // Status Priority String
+        readPin('V5'), // Lid Open
+        readPin('V6')  // IR Detection
+      ]);
+
+      if (isMounted) {
+        setStatusParams(prev => {
+          const parsedLidOpen = v5 !== null ? (Number(v5) === 1) : prev.lidOpen;
+          const parsedIrDetected = v6 !== null ? (Number(v6) === 1) : prev.irDetected;
+
+          let determinedState = prev.currentState;
+
+          if (!v2 || v2 === "") {
+            if (parsedLidOpen) {
+              determinedState = "BOX OPEN";
+            } else if (parsedIrDetected) {
+              determinedState = "PILL DETECTED";
+            } else {
+              determinedState = "SYNCING...";
+            }
+          } else {
+            determinedState = v2;
+          }
+
+          // 🔥 ADD TO HISTORY LOGIC (Event Driven)
+          if (
+            determinedState !== lastLoggedStatus.current &&
+            determinedState !== "SYNCING..." &&
+            determinedState !== "Connecting..."
+          ) {
+            if (determinedState !== "SYSTEM NORMAL") {
+              addHistoryEvent({
+                type: 'Hardware Alert',
+                med_name: determinedState,
+                scheduled_time: 'N/A',
+              });
+            }
+            lastLoggedStatus.current = determinedState;
+          }
+
+          return {
+            ...prev,
+            online: v2 !== null || prev.online, // Keep online if we have any data (live or prev)
+            isStale: v2 === null && prev.isStale, // Only stale if persistent failure
+            currentState: determinedState,
+            lidOpen: parsedLidOpen,
+            irDetected: parsedIrDetected,
+            containerEmpty: v2 === "LOW MEDICINE",
+          };
         });
       }
-    });
+    };
+
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 3000);
 
     return () => {
-      off(statusRef);
+      isMounted = false;
+      clearInterval(interval);
     };
   }, [deviceId]);
 
